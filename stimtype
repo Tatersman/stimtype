@@ -7,26 +7,44 @@ import time
 
 
 WORDS = tuple("""
-anchor apple autumn balance bamboo beacon blossom bottle breeze bridge
-bright bubble button cactus candle canyon castle cherry circle cloud
-coffee comet compass copper cotton crystal curious cushion dance dawn
-desert diamond dolphin dragon dream drift eagle earth echo ember
-energy evening feather fern field flame flower forest fossil fountain
-freedom frost galaxy garden gentle glacier golden granite grape gravity
-green guitar harbor harmony harvest hazel hidden honey horizon island
-jacket jasmine journey jungle kettle kitten ladder lantern lemon letter
-library lightning lilac little lizard lucky lunar magnet maple marble
-meadow melody memory midnight mirror mist moment morning mountain music
-needle nest ocean olive orange orbit orchid otter paddle palace panda
-paper pebble pencil pepper petal piano picnic pillow planet pocket
-poetry pond prism puzzle quartz quiet rabbit rainbow raven ribbon
-river rocket rose ripple round ruby saddle sailor sand satin
-scarlet shadow shelter shimmer silver simple sky smooth snow solar
-spark sparrow spirit spring sprout square squirrel star stone storm
-stream sugar summer summit sunset swift temple tender thunder timber
-tiny tomato torch travel tree tulip turtle valley velvet violet
-vision voyage walnut water wave whisper willow window winter wonder
-wood yellow zebra zephyr
+pneumonoultramicroscopicsilicovolcanoconiosis
+hippopotomonstrosesquipedaliophobia
+supercalifragilisticexpialidocious
+pseudopseudohypoparathyroidism
+floccinaucinihilipilification
+antidisestablishmentarianism
+honorificabilitudinitatibus
+thyroparathyroidectomized
+dichlorodifluoromethane
+electroencephalographically
+psychoneuroendocrinology
+electroencephalography
+magnetoencephalography
+immunoelectrophoresis
+otorhinolaryngological
+counterrevolutionaries
+uncharacteristically
+incomprehensibilities
+deinstitutionalization
+institutionalization
+internationalization
+compartmentalization
+spectrophotometrically
+spectrophotofluorometry
+photolithographically
+crystallographically
+psychopharmacological
+neuropsychopharmacology
+immunohistochemistry
+electrocardiographically
+electroencephalographer
+electrophysiological
+phosphatidylethanolamine
+deoxyribonucleoprotein
+trinitrophenylmethylnitramine
+tetrachlorodibenzodioxin
+dichlorodiphenyltrichloroethane
+radiotelecommunications
 """.split())
 
 
@@ -54,12 +72,6 @@ def accuracy(expected, typed):
 
 def play():
     """Show a word, time one response, score it, and repeat until quit."""
-    print("stimtype — one word at a time")
-    print("Type the word and press Enter. :q or Ctrl+C quits.")
-    print("Time runs from the prompt to Enter; accuracy uses your final text.")
-    rounds = 0
-    total_accuracy = 0.0
-    total_seconds = 0.0
     previous_word = None
 
     try:
@@ -67,7 +79,7 @@ def play():
             # Avoid showing the same word twice in a row.
             word = random.choice(tuple(w for w in WORDS if w != previous_word))
             previous_word = word
-            print("\nWord: " + word)
+            print(word)
             print("> ", end="", flush=True)
             started = time.perf_counter()
             typed = input()
@@ -77,27 +89,19 @@ def play():
                 break
 
             score = accuracy(word, typed)
-            rounds += 1
-            total_accuracy += score
-            total_seconds += elapsed
-            print("Accuracy: {:.1f}% | Time: {:.2f}s".format(score, elapsed))
+            print("accuracy {:.1f}% time: {:.2f}s\n".format(score, elapsed))
     except (KeyboardInterrupt, EOFError):
         print()
 
-    if rounds:
-        print("\n{} round{} | Average accuracy: {:.1f}% | Average time: {:.2f}s".format(
-            rounds, "" if rounds == 1 else "s",
-            total_accuracy / rounds, total_seconds / rounds,
-        ))
-    print("Thanks for playing!")
     return 0
 
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Practice random words, with accuracy and time after every attempt."
+        description="Practice extremely long words, with accuracy and time after every attempt.",
+        epilog="Type the word and press Enter. :q, Ctrl+C, or EOF quits.",
     )
-    parser.add_argument("--version", action="version", version="stimtype 1.0.0")
+    parser.add_argument("--version", action="version", version="stimtype 1.1.0")
     parser.parse_args()
     return play()
 

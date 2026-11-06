@@ -46,25 +46,44 @@ class AccuracyTests(unittest.TestCase):
 class GameTests(unittest.TestCase):
     def run_game(self, answers, words=None, times=None):
         output = io.StringIO()
+        responses = iter(answers)
+
+        def terminal_input():
+            response = next(responses)
+            if isinstance(response, type) and issubclass(response, BaseException):
+                raise response
+            # Real terminals echo submitted text, including the final newline.
+            print(response)
+            return response
+
         with contextlib.redirect_stdout(output), \
-                patch("builtins.input", side_effect=answers), \
+                patch("builtins.input", side_effect=terminal_input), \
                 patch.object(game.random, "choice", side_effect=words or ["garden"]), \
                 patch.object(game.time, "perf_counter", side_effect=times or [10.0]):
             result = game.play()
         self.assertEqual(result, 0)
         return output.getvalue()
 
-    def test_multiple_rounds_report_elapsed_time_accuracy_and_averages(self):
+    def test_exact_requested_template_with_a_mocked_word(self):
+        output = self.run_game(
+            answers=["nest", ":q"],
+            words=["nest", "garden"],
+            times=[10.0, 11.12, 20.0, 21.0],
+        )
+        self.assertEqual(output, "nest\n> nest\naccuracy 100.0% time: 1.12s\n\ngarden\n> :q\n")
+
+    def test_multiple_rounds_report_elapsed_time_and_accuracy(self):
         output = self.run_game(
             answers=["garden", "forst", ":q"],
             words=["garden", "forest", "apple"],
             times=[10.0, 11.25, 20.0, 22.75, 30.0, 35.0],
         )
-        self.assertIn("Accuracy: 100.0% | Time: 1.25s", output)
-        self.assertIn("Accuracy: 83.3% | Time: 2.75s", output)
-        self.assertIn("2 rounds | Average accuracy: 91.7% | Average time: 2.00s", output)
-        self.assertEqual(output.count("Word: "), 3)
-        self.assertTrue(output.rstrip().endswith("Thanks for playing!"))
+        self.assertEqual(
+            output,
+            "garden\n> garden\naccuracy 100.0% time: 1.25s\n\n"
+            "forest\n> forst\naccuracy 83.3% time: 2.75s\n\n"
+            "apple\n> :q\n",
+        )
 
     def test_empty_answer_is_a_scored_round(self):
         output = self.run_game(
@@ -72,21 +91,17 @@ class GameTests(unittest.TestCase):
             words=["garden", "forest"],
             times=[10.0, 11.0, 20.0, 21.0],
         )
-        self.assertIn("Accuracy: 0.0% | Time: 1.00s", output)
-        self.assertIn("1 round | Average accuracy: 0.0%", output)
+        self.assertEqual(output, "garden\n> \naccuracy 0.0% time: 1.00s\n\nforest\n> :q\n")
 
     def test_quit_does_not_count_as_an_attempt(self):
         output = self.run_game([":q"], times=[10.0, 12.0])
-        self.assertNotIn("Accuracy:", output)
-        self.assertNotIn("Average accuracy:", output)
-        self.assertIn("Thanks for playing!", output)
+        self.assertEqual(output, "garden\n> :q\n")
 
     def test_eof_and_keyboard_interrupt_before_first_round_exit_cleanly(self):
         for exit_signal in (EOFError, KeyboardInterrupt):
             with self.subTest(exit_signal=exit_signal):
                 output = self.run_game([exit_signal])
-                self.assertNotIn("Accuracy:", output)
-                self.assertIn("Thanks for playing!", output)
+                self.assertEqual(output, "garden\n> \n")
 
     def test_eof_and_keyboard_interrupt_preserve_completed_results(self):
         for exit_signal in (EOFError, KeyboardInterrupt):
@@ -96,7 +111,10 @@ class GameTests(unittest.TestCase):
                     words=["garden", "forest"],
                     times=[10.0, 11.0, 20.0],
                 )
-                self.assertIn("1 round | Average accuracy: 100.0% | Average time: 1.00s", output)
+                self.assertEqual(
+                    output,
+                    "garden\n> garden\naccuracy 100.0% time: 1.00s\n\nforest\n> \n",
+                )
 
     def test_previous_word_is_excluded_from_the_next_selection(self):
         choices = []
@@ -113,9 +131,21 @@ class GameTests(unittest.TestCase):
         self.assertNotIn(choices[0][0], choices[1])
 
 
+class WordListTests(unittest.TestCase):
+    def test_words_are_unique_lowercase_letters_and_at_least_twenty_characters(self):
+        self.assertGreater(len(game.WORDS), 1)
+        self.assertEqual(len(game.WORDS), len(set(game.WORDS)))
+        for word in game.WORDS:
+            with self.subTest(word=word):
+                self.assertGreaterEqual(len(word), 20)
+                self.assertTrue(word.isalpha())
+                self.assertTrue(word.isascii())
+                self.assertEqual(word, word.lower())
+
+
 class CommandTests(unittest.TestCase):
     def test_help_and_version_do_not_start_a_round(self):
-        for option, expected in (("--help", "usage:"), ("--version", "stimtype 1.0.0")):
+        for option, expected in (("--help", "usage:"), ("--version", "stimtype 1.1.0")):
             with self.subTest(option=option):
                 process = subprocess.run(
                     [sys.executable, str(SCRIPT), option],
@@ -123,7 +153,7 @@ class CommandTests(unittest.TestCase):
                 )
                 self.assertEqual(process.returncode, 0, process.stderr)
                 self.assertIn(expected, process.stdout)
-                self.assertNotIn("Word:", process.stdout)
+                self.assertNotIn("> ", process.stdout)
 
     def test_actual_process_accepts_input_then_quits(self):
         process = subprocess.run(
@@ -131,8 +161,10 @@ class CommandTests(unittest.TestCase):
             input="\n:q\n", capture_output=True, text=True, timeout=5,
         )
         self.assertEqual(process.returncode, 0, process.stderr)
-        self.assertIn("Accuracy: 0.0% | Time:", process.stdout)
-        self.assertIn("1 round | Average accuracy: 0.0%", process.stdout)
+        self.assertRegex(
+            process.stdout,
+            r"\A[a-z]{20,}\n> accuracy 0\.0% time: \d+\.\d{2}s\n\n[a-z]{20,}\n> \Z",
+        )
         self.assertEqual(process.stderr, "")
 
 

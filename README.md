@@ -1,17 +1,22 @@
 # stimtype
 
-A tiny terminal typing game. See a random word, type it, press Enter, and get
-your accuracy and elapsed time. The next word appears automatically. Runs
-offline with Python 3.8 or newer; no packages required.
+A tiny terminal typing game with extremely long, difficult words (20–45 letters).
+See a random word, type it, press Enter, and get your accuracy and elapsed time.
+The next word appears automatically. Runs offline with Python 3.8 or newer;
+no packages required.
 
 ## Install on Linux
 
-Check that `python3 --version` works, then run:
+Check that `python3 --version` works. This repository is private, so authenticate
+with GitHub before cloning. On CachyOS/Arch, if GitHub CLI is not installed,
+`sudo pacman -Syu --needed github-cli` installs it along with a full system update.
+Then run:
 
 ```sh
-git clone https://github.com/Tatersman/stimtype.git
-cd stimtype
-sudo install -m 755 stimtype /usr/local/bin/stimtype
+gh auth login --hostname github.com --git-protocol https --web
+gh repo clone Tatersman/stimtype &&
+cd stimtype &&
+sudo install -m 755 stimtype /usr/local/bin/stimtype &&
 stimtype
 ```
 
@@ -39,13 +44,13 @@ You can also play without installing: `python3 stimtype`.
 ## Play
 
 ```text
-Word: garden
-> garden
-Accuracy: 100.0% | Time: 1.24s
+electroencephalography
+> electroencephalography
+accuracy 100.0% time: 4.12s
 
-Word: forest
-> forst
-Accuracy: 83.3% | Time: 1.51s
+antidisestablishmentarianism
+> antidisestablishmentarianism
+accuracy 100.0% time: 5.31s
 ```
 
 - Press Enter to submit each word. Backspace works normally in your terminal.
@@ -57,12 +62,21 @@ Accuracy: 83.3% | Time: 1.51s
   Missing, extra, and substituted characters count as edits. An empty answer
   scores 0%; an exact match scores 100%. Corrections made before submitting do
   not count against you.
-- A session average is shown when you quit. Nothing is saved or sent anywhere.
+- The screen contains just the word, input prompt, and result for each round.
+  Nothing is saved or sent anywhere.
 
 ## Update or uninstall
 
-To update, run `git pull --ff-only` in the cloned folder and repeat the `install`
-command. To uninstall a system installation:
+To update an existing installation (works in Fish and Bash):
+
+```sh
+cd ~/stimtype &&
+git pull --ff-only &&
+sudo install -m 755 stimtype /usr/local/bin/stimtype &&
+stimtype
+```
+
+To uninstall a system installation:
 
 ```sh
 sudo rm /usr/local/bin/stimtype
