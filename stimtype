@@ -1,0 +1,106 @@
+#!/usr/bin/env python3
+"""An endless, dependency-free terminal typing game. Requires Python 3.8+."""
+
+import argparse
+import random
+import time
+
+
+WORDS = tuple("""
+anchor apple autumn balance bamboo beacon blossom bottle breeze bridge
+bright bubble button cactus candle canyon castle cherry circle cloud
+coffee comet compass copper cotton crystal curious cushion dance dawn
+desert diamond dolphin dragon dream drift eagle earth echo ember
+energy evening feather fern field flame flower forest fossil fountain
+freedom frost galaxy garden gentle glacier golden granite grape gravity
+green guitar harbor harmony harvest hazel hidden honey horizon island
+jacket jasmine journey jungle kettle kitten ladder lantern lemon letter
+library lightning lilac little lizard lucky lunar magnet maple marble
+meadow melody memory midnight mirror mist moment morning mountain music
+needle nest ocean olive orange orbit orchid otter paddle palace panda
+paper pebble pencil pepper petal piano picnic pillow planet pocket
+poetry pond prism puzzle quartz quiet rabbit rainbow raven ribbon
+river rocket rose ripple round ruby saddle sailor sand satin
+scarlet shadow shelter shimmer silver simple sky smooth snow solar
+spark sparrow spirit spring sprout square squirrel star stone storm
+stream sugar summer summit sunset swift temple tender thunder timber
+tiny tomato torch travel tree tulip turtle valley velvet violet
+vision voyage walnut water wave whisper willow window winter wonder
+wood yellow zebra zephyr
+""".split())
+
+
+def accuracy(expected, typed):
+    """Score final text using normalized Levenshtein edit distance (0–100)."""
+    length = max(len(expected), len(typed))
+    if length == 0:
+        return 100.0
+
+    # Keep the shorter string in the row to bound working memory.
+    if len(expected) < len(typed):
+        expected, typed = typed, expected
+    previous = list(range(len(typed) + 1))
+    for i, expected_char in enumerate(expected, 1):
+        current = [i]
+        for j, typed_char in enumerate(typed, 1):
+            current.append(min(
+                current[-1] + 1,                  # Insert a character.
+                previous[j] + 1,                  # Delete a character.
+                previous[j - 1] + (expected_char != typed_char),
+            ))
+        previous = current
+    return 100.0 * (1.0 - previous[-1] / length)
+
+
+def play():
+    """Show a word, time one response, score it, and repeat until quit."""
+    print("stimtype — one word at a time")
+    print("Type the word and press Enter. :q or Ctrl+C quits.")
+    print("Time runs from the prompt to Enter; accuracy uses your final text.")
+    rounds = 0
+    total_accuracy = 0.0
+    total_seconds = 0.0
+    previous_word = None
+
+    try:
+        while True:
+            # Avoid showing the same word twice in a row.
+            word = random.choice(tuple(w for w in WORDS if w != previous_word))
+            previous_word = word
+            print("\nWord: " + word)
+            print("> ", end="", flush=True)
+            started = time.perf_counter()
+            typed = input()
+            elapsed = time.perf_counter() - started
+
+            if typed.strip() == ":q":
+                break
+
+            score = accuracy(word, typed)
+            rounds += 1
+            total_accuracy += score
+            total_seconds += elapsed
+            print("Accuracy: {:.1f}% | Time: {:.2f}s".format(score, elapsed))
+    except (KeyboardInterrupt, EOFError):
+        print()
+
+    if rounds:
+        print("\n{} round{} | Average accuracy: {:.1f}% | Average time: {:.2f}s".format(
+            rounds, "" if rounds == 1 else "s",
+            total_accuracy / rounds, total_seconds / rounds,
+        ))
+    print("Thanks for playing!")
+    return 0
+
+
+def main():
+    parser = argparse.ArgumentParser(
+        description="Practice random words, with accuracy and time after every attempt."
+    )
+    parser.add_argument("--version", action="version", version="stimtype 1.0.0")
+    parser.parse_args()
+    return play()
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
