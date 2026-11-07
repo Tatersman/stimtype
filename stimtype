@@ -108,7 +108,7 @@ def load_words(offline=False):
         })
         request = urllib.request.Request(
             "https://api.datamuse.com/words?" + query,
-            headers={"User-Agent": "stimtype/1.5.0"},
+            headers={"User-Agent": "stimtype/1.6.0"},
         )
         try:
             with urllib.request.urlopen(request, timeout=3) as response:
@@ -173,8 +173,8 @@ def word_heading(word, remaining=None):
     return color(text, "1;31" if remaining <= 5 else "1;36")
 
 
-def read_live_answer(word, deadline):
-    """Own echo while ticking so timer redraws never overwrite typed input."""
+def read_live_answer(word, deadline=None):
+    """Read Space/Enter submissions, with optional countdown and controlled echo."""
     import termios
     import tty
     fd = sys.stdin.fileno()
@@ -191,25 +191,30 @@ def read_live_answer(word, deadline):
         available = max(0, width - 2)
         visible = visible[-available:] if available else ""
         prompt = ("> " + visible)[:width]
-        print("\r\033[1A\033[2K" + word_heading(word, remaining)
-              + "\n\r\033[2K" + color(prompt, "35"), end="", flush=True)
+        if live_terminal():
+            print("\r\033[1A\033[2K" + word_heading(word, remaining)
+                  + "\n\r\033[2K" + color(prompt, "35"), end="", flush=True)
+        else:
+            # Plain-terminal fallback without ANSI cursor sequences.
+            print("\r" + prompt.ljust(width) + "\r" + prompt, end="", flush=True)
 
     try:
-        tty.setcbreak(fd)
+        tty.setcbreak(fd, termios.TCSANOW)
         while True:
-            remaining = max(0, deadline - time.perf_counter())
+            remaining = None if deadline is None else max(0, deadline - time.perf_counter())
             redraw(remaining)
-            if remaining <= 0:
+            if remaining is not None and remaining <= 0:
                 raise TimeUp
-            if not select.select([fd], [], [], min(0.1, remaining))[0]:
+            timeout = None if remaining is None else min(0.1, remaining)
+            if not select.select([fd], [], [], timeout)[0]:
                 continue
             raw = os.read(fd, 1)
             if not raw:
                 raise EOFError
-            if time.perf_counter() >= deadline:
+            if deadline is not None and time.perf_counter() >= deadline:
                 redraw(0)
                 raise TimeUp
-            if raw in (b"\r", b"\n") or (raw == b"\x04" and typed):
+            if raw in (b" ", b"\r", b"\n") or (raw == b"\x04" and typed):
                 print()
                 return typed
             if raw == b"\x04":
@@ -228,7 +233,8 @@ def read_live_answer(word, deadline):
                 decoder.reset()
             elif raw == b"\x1b":
                 # Ignore terminal navigation sequences rather than score them.
-                while select.select([fd], [], [], min(0.02, max(0, deadline - time.perf_counter())))[0]:
+                escape_wait = 0.02 if deadline is None else min(0.02, max(0, deadline - time.perf_counter()))
+                while select.select([fd], [], [], escape_wait)[0]:
                     part = os.read(fd, 1)
                     if not part or part not in (b"[", b"O") and b"@" <= part <= b"~":
                         break
@@ -285,7 +291,7 @@ def play(words, duration=None, best=0.0):
             started = time.perf_counter()
             if duration is not None and deadline is None:
                 deadline = started + duration
-            if deadline is not None and live_terminal():
+            if sys.stdin.isatty():
                 typed = read_live_answer(word, deadline)
             else:
                 typed = read_answer(deadline)
@@ -295,10 +301,11 @@ def play(words, duration=None, best=0.0):
             if typed.strip() == ":q":
                 break
             score = accuracy(word, typed)
-            points += earned_points(score, elapsed)
+            word_points = earned_points(score, elapsed)
+            points += word_points
             rounds += 1
-            print(color("accuracy {:.1f}% time: {:.2f}s points: {} best: {}".format(
-                score, elapsed, display_score(points), display_score(max(best, points)),
+            print(color("accuracy {:.1f}% time: {:.2f}s points: {} score {} best: {}".format(
+                score, elapsed, display_score(word_points), display_score(points), display_score(max(best, points)),
             ), "32" if score == 100 else "33") + "\n")
     except TimeUp:
         discard_partial_input()
@@ -397,10 +404,10 @@ def main():
     global COLOR_ENABLED
     parser = argparse.ArgumentParser(
         description="Practice college-level vocabulary with timed tests or free play.",
-        epilog="Type the word and press Enter. :q opens replay; Ctrl+C or EOF quits.",
+        epilog="Type the word and press Space or Enter. :q opens replay; Ctrl+C or EOF quits.",
     )
     parser.add_argument("--offline", action="store_true", help="use the built-in vocabulary without fetching online")
-    parser.add_argument("--version", action="version", version="stimtype 1.5.0")
+    parser.add_argument("--version", action="version", version="stimtype 1.6.0")
     parser.add_argument("--no-color", action="store_true", help="disable terminal colors")
     args = parser.parse_args()
     COLOR_ENABLED = not args.no_color
@@ -411,7 +418,7 @@ def main():
             if not args.offline:
                 print("Loading vocabulary...")
             words = load_words(args.offline)
-            print("Type each word and press Enter. :q ends the session; Ctrl+C quits.\n")
+            print("Type each word and press Space or Enter. :q ends the session; Ctrl+C quits.\n")
             points, exit_requested = play(words, MODES[choice], bests.get(choice, 0))
             save_best(bests, choice, points)
             if exit_requested:

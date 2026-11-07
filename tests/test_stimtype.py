@@ -57,8 +57,8 @@ class GameTests(unittest.TestCase):
 
     def test_points_accumulate_inverse_time_formula(self):
         output = self.play(["analysis", "analysis", ":q"], [0, 1.12, 2, 4, 5, 6])
-        self.assertIn("accuracy 100.0% time: 1.12s points: 179", output)
-        self.assertIn("accuracy 100.0% time: 2.00s points: 279", output)
+        self.assertIn("accuracy 100.0% time: 1.12s points: 179 score 179 best: 179", output)
+        self.assertIn("accuracy 100.0% time: 2.00s points: 100 score 279 best: 279", output)
         self.assertIn("words: 2 score: 279", output)
 
     def test_incorrect_answer_gets_proportional_points(self):
@@ -297,6 +297,61 @@ class CountdownTests(unittest.TestCase):
         self.assertEqual(game.word_heading("analysis"), "analysis")
         self.assertEqual(game.word_heading("analysis", 14.9), "analysis  14.9s")
         self.assertEqual(game.word_heading("analysis", -1), "analysis  0.0s")
+
+
+class SpaceSubmitTests(unittest.TestCase):
+    def check_submissions(self, duration, term="xterm"):
+        import pty
+        import select
+        import termios
+        import time
+        import re
+        master, slave = pty.openpty()
+        original = termios.tcgetattr(slave)
+        code = "import runpy; g=runpy.run_path(%r); g['play'](['analysis'], %r)" % (str(SCRIPT), duration)
+        process = subprocess.Popen([sys.executable, "-c", code], stdin=slave,
+            stdout=slave, stderr=slave, env=dict(os.environ, TERM=term, NO_COLOR="1"))
+        transcript = bytearray()
+
+        def until(marker):
+            output = bytearray()
+            end = time.monotonic() + 4
+            while marker not in output and time.monotonic() < end:
+                if select.select([master], [], [], 0.1)[0]:
+                    output.extend(os.read(master, 8192))
+            transcript.extend(output)
+            self.assertIn(marker, output, output)
+            return output
+
+        try:
+            until(b"> ")
+            os.write(master, b"analysix\x7fs ")
+            until(b"accuracy 100.0%")  # Space submits before any Enter.
+            os.write(master, b"analysis\r")
+            until(b"accuracy 100.0%")  # Enter still submits too.
+            os.write(master, b":q ")
+            until(b"words: 2 score:")
+            process.wait(timeout=3)
+            self.assertEqual(process.returncode, 0, transcript)
+            self.assertEqual(termios.tcgetattr(slave), original)
+            self.assertEqual(len(re.findall(rb"accuracy 100.0%", transcript)), 2)
+            if term == "dumb":
+                self.assertNotIn(b"\x1b[", transcript)
+        finally:
+            if process.poll() is None:
+                process.kill()
+                process.wait()
+            os.close(master)
+            os.close(slave)
+
+    def test_space_and_enter_in_timed_mode(self):
+        self.check_submissions(10)
+
+    def test_space_and_enter_in_free_play(self):
+        self.check_submissions(None)
+
+    def test_space_and_enter_in_plain_terminal(self):
+        self.check_submissions(None, "dumb")
 
 
 class WordTests(unittest.TestCase):

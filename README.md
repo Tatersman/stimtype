@@ -3,21 +3,36 @@
 A dependency-free Linux terminal typing game with college-style vocabulary,
 accuracy, elapsed time, cumulative points, and saved best scores. Requires Python 3.8 or newer.
 
-## Install
+## Install on Linux
 
-This repository is private. Authenticate with GitHub CLI, then install:
+Install Python 3 and Git first. On CachyOS/Arch:
 
 ```sh
-gh auth login --hostname github.com --git-protocol https --web
-gh repo clone Tatersman/stimtype &&
+sudo pacman -Syu --needed python git
+```
+
+This also performs a full system update. Then clone and install (works in Fish
+and Bash):
+
+```sh
+git clone https://github.com/Tatersman/stimtype.git &&
 cd stimtype &&
 sudo install -m 755 stimtype /usr/local/bin/stimtype &&
 stimtype
 ```
 
-On CachyOS/Arch, `sudo pacman -Syu --needed github-cli python` installs the
-prerequisites along with a full system update. After installation, run
-`stimtype` from any directory. To try it without installing, run `python3 stimtype`.
+After installation, type `stimtype` from any directory. If you already cloned
+the repository, use the update commands below instead. To try it without
+installing, run `python3 stimtype` from the cloned folder.
+
+For a user-only installation in Fish, run these commands from the cloned folder:
+
+```fish
+mkdir -p ~/.local/bin &&
+install -m 755 stimtype ~/.local/bin/stimtype &&
+fish_add_path ~/.local/bin &&
+stimtype
+```
 
 ## Play
 
@@ -43,10 +58,11 @@ Each round follows this format:
 ```text
 hypothesis
 > hypothesis
-accuracy 100.0% time: 1.12s points: 179 best: 179
+accuracy 100.0% time: 1.12s points: 179 score 179 best: 179
 ```
 
-- Submit with Enter; Backspace works normally. Type `:q` to end a session and
+- Submit with **Space or Enter** in timed tests and free play. The submitting
+  space is not part of the answer. Backspace works normally. Type `:q` to end a session and
   open the play-again menu. Ctrl+C or EOF (Ctrl+D on an empty line) exits the game.
 - In timed modes, a live countdown appears next to the word, for example
   `hypothesis  14.9s`. It shows the session's remaining time, updates every tenth
@@ -69,8 +85,10 @@ accuracy 100.0% time: 1.12s points: 179 best: 179
   A new record is saved at session end, including when you exit with Ctrl+C.
   Existing saved bests are automatically displayed at the new 200× scale.
   Records remain stored in original units to preserve compatibility.
-- Time includes reading/reaction time and the final Enter. Accuracy compares
-  your final submitted text, including case and spaces, using
+- `points` shows the gain for the word just submitted; `score` is the cumulative
+  session total and `best` is the highest total for the mode.
+- Time includes reading/reaction time and the submitting Space or Enter. Accuracy
+  compares your final submitted text, including case, using
   `100 × (1 − edit_distance / max(word_length, typed_length))`. Missing, extra,
   and substituted characters count as edits. Empty answers score 0%; corrections
   made before submitting do not count against you.
@@ -126,7 +144,9 @@ sudo install -m 755 stimtype /usr/local/bin/stimtype &&
 stimtype
 ```
 
-Uninstall with `sudo rm /usr/local/bin/stimtype`.
+Uninstall with `sudo rm /usr/local/bin/stimtype`. For a user-only installation,
+update by copying to `~/.local/bin/stimtype` instead, or uninstall by removing
+that file.
 
 ## Tests
 
@@ -139,4 +159,5 @@ actual terminal expiry without Enter, clean exits, shuffled word selection,
 online response validation, offline fallback, replay and mode switching, best-score
 persistence, corrupt score files, save failures, color controls, real arrow-key
 navigation, terminal restoration on interruption, scaled scores, live countdown expiry, typing and Backspace during timer
-updates, and terminal restoration after countdown interruption.
+updates, terminal restoration after countdown interruption, and Space/Enter
+submission in timed, free-play, and plain-terminal modes.
