@@ -2,6 +2,7 @@
 """College vocabulary typing practice for Linux. Python 3.8+, no dependencies."""
 
 import argparse
+import codecs
 import json
 import math
 import os
@@ -107,7 +108,7 @@ def load_words(offline=False):
         })
         request = urllib.request.Request(
             "https://api.datamuse.com/words?" + query,
-            headers={"User-Agent": "stimtype/1.4.0"},
+            headers={"User-Agent": "stimtype/1.5.0"},
         )
         try:
             with urllib.request.urlopen(request, timeout=3) as response:
@@ -158,6 +159,86 @@ def read_answer(deadline=None):
     return answer.rstrip("\r\n")
 
 
+def live_terminal():
+    return (sys.stdin.isatty() and sys.stdout.isatty()
+            and os.environ.get("TERM") != "dumb")
+
+
+def word_heading(word, remaining=None):
+    if remaining is None:
+        return color(word, "1;36")
+    text = "{}  {:.1f}s".format(word, max(0, remaining))
+    if live_terminal():
+        text = text[:max(1, shutil.get_terminal_size().columns - 1)]
+    return color(text, "1;31" if remaining <= 5 else "1;36")
+
+
+def read_live_answer(word, deadline):
+    """Own echo while ticking so timer redraws never overwrite typed input."""
+    import termios
+    import tty
+    fd = sys.stdin.fileno()
+    original = termios.tcgetattr(fd)
+    typed = ""
+    decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")
+
+    def redraw(remaining):
+        # A horizontally scrolling preview keeps the input on one screen row,
+        # even for long answers. Escape non-ASCII for predictable cell widths;
+        # the actual Unicode text is preserved for accuracy scoring.
+        width = max(1, shutil.get_terminal_size().columns - 1)
+        visible = typed.encode("ascii", "backslashreplace").decode("ascii")
+        available = max(0, width - 2)
+        visible = visible[-available:] if available else ""
+        prompt = ("> " + visible)[:width]
+        print("\r\033[1A\033[2K" + word_heading(word, remaining)
+              + "\n\r\033[2K" + color(prompt, "35"), end="", flush=True)
+
+    try:
+        tty.setcbreak(fd)
+        while True:
+            remaining = max(0, deadline - time.perf_counter())
+            redraw(remaining)
+            if remaining <= 0:
+                raise TimeUp
+            if not select.select([fd], [], [], min(0.1, remaining))[0]:
+                continue
+            raw = os.read(fd, 1)
+            if not raw:
+                raise EOFError
+            if time.perf_counter() >= deadline:
+                redraw(0)
+                raise TimeUp
+            if raw in (b"\r", b"\n") or (raw == b"\x04" and typed):
+                print()
+                return typed
+            if raw == b"\x04":
+                raise EOFError
+            if raw == b"\x03":
+                raise KeyboardInterrupt
+            if raw in (b"\x7f", b"\x08"):
+                typed = typed[:-1]
+                decoder.reset()
+            elif raw == b"\x15":  # Ctrl+U clears the answer.
+                typed = ""
+                decoder.reset()
+            elif raw == b"\x17":  # Ctrl+W erases the last word.
+                typed = typed.rstrip()
+                typed = typed[:typed.rfind(" ") + 1]
+                decoder.reset()
+            elif raw == b"\x1b":
+                # Ignore terminal navigation sequences rather than score them.
+                while select.select([fd], [], [], min(0.02, max(0, deadline - time.perf_counter())))[0]:
+                    part = os.read(fd, 1)
+                    if not part or part not in (b"[", b"O") and b"@" <= part <= b"~":
+                        break
+            else:
+                text = decoder.decode(raw)
+                typed += "".join(char for char in text if char.isprintable())
+    finally:
+        termios.tcsetattr(fd, termios.TCSADRAIN, original)
+
+
 def discard_partial_input():
     # Do not leave an unfinished timed answer for the user's shell to execute.
     if sys.stdin.isatty():
@@ -194,14 +275,20 @@ def play(words, duration=None, best=0.0):
     exit_requested = False
     try:
         for word in shuffled_words(words):
-            if deadline is not None and time.perf_counter() >= deadline:
-                raise TimeUp
-            print(color(word, "1;36"))
+            remaining = duration
+            if deadline is not None:
+                remaining = deadline - time.perf_counter()
+                if remaining <= 0:
+                    raise TimeUp
+            print(word_heading(word, remaining))
             print(color("> ", "35"), end="", flush=True)
             started = time.perf_counter()
             if duration is not None and deadline is None:
                 deadline = started + duration
-            typed = read_answer(deadline)
+            if deadline is not None and live_terminal():
+                typed = read_live_answer(word, deadline)
+            else:
+                typed = read_answer(deadline)
             elapsed = time.perf_counter() - started
             if deadline is not None and started + elapsed >= deadline:
                 raise TimeUp
@@ -313,7 +400,7 @@ def main():
         epilog="Type the word and press Enter. :q opens replay; Ctrl+C or EOF quits.",
     )
     parser.add_argument("--offline", action="store_true", help="use the built-in vocabulary without fetching online")
-    parser.add_argument("--version", action="version", version="stimtype 1.4.0")
+    parser.add_argument("--version", action="version", version="stimtype 1.5.0")
     parser.add_argument("--no-color", action="store_true", help="disable terminal colors")
     args = parser.parse_args()
     COLOR_ENABLED = not args.no_color

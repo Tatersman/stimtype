@@ -227,6 +227,78 @@ class ArrowMenuTests(unittest.TestCase):
         self.run_terminal_menus(interrupt=True)
 
 
+class CountdownTests(unittest.TestCase):
+    def terminal_session(self, editing=False, interrupt=False):
+        import pty
+        import select
+        import signal
+        import termios
+        import time
+        import re
+        master, slave = pty.openpty()
+        original = termios.tcgetattr(slave)
+        duration = 2 if editing or interrupt else 0.35
+        code = "import runpy; g=runpy.run_path(%r); g['play'](['analysis'], %r)" % (str(SCRIPT), duration)
+        process = subprocess.Popen([sys.executable, "-c", code], stdin=slave,
+            stdout=slave, stderr=slave, env=dict(os.environ, TERM="xterm", NO_COLOR="1"))
+        transcript = bytearray()
+
+        def until(marker):
+            end = time.monotonic() + 4
+            output = bytearray()
+            while marker not in output and time.monotonic() < end:
+                if select.select([master], [], [], 0.05)[0]:
+                    output.extend(os.read(master, 8192))
+            transcript.extend(output)
+            self.assertIn(marker, output, output)
+            return output
+
+        try:
+            until(b"\x1b[1A")  # Initial redraw means cbreak is active.
+            if editing:
+                os.write(master, b"analysix\x7fs")
+                # Input must remain intact through multiple idle timer updates.
+                until(b"analysis  1.7s")
+                os.write(master, b"\r")
+                until(b"accuracy 100.0%")
+                os.write(master, b":q\r")
+                until(b"words: 1 score:")
+            elif interrupt:
+                process.send_signal(signal.SIGINT)
+                until(b"words: 0 score: 0")
+            else:
+                os.write(master, b"unfinished")
+                until(b"words: 0 score: 0")
+                times = [float(value) for value in re.findall(rb"analysis  ([0-9.]+)s", transcript)]
+                self.assertGreater(len(set(times)), 2)
+                self.assertEqual(times[-1], 0)
+                self.assertEqual(times, sorted(times, reverse=True))
+            process.wait(timeout=3)
+            self.assertEqual(process.returncode, 0, transcript)
+            self.assertEqual(termios.tcgetattr(slave), original)
+            self.assertNotIn(b"\x1b[1;", transcript)  # NO_COLOR still permits countdown.
+        finally:
+            if process.poll() is None:
+                process.kill()
+                process.wait()
+            os.close(master)
+            os.close(slave)
+
+    def test_live_countdown_decreases_to_zero_without_enter(self):
+        self.terminal_session()
+
+    def test_typing_and_backspace_survive_countdown_updates(self):
+        self.terminal_session(editing=True)
+
+    def test_countdown_interrupt_restores_terminal(self):
+        self.terminal_session(interrupt=True)
+
+    def test_free_play_heading_has_no_countdown(self):
+        self.assertEqual(game.word_heading("analysis"), "analysis")
+        self.assertEqual(game.word_heading("analysis", 14.9), "analysis  14.9s")
+        self.assertEqual(game.word_heading("analysis", -1), "analysis  0.0s")
+
+
 class WordTests(unittest.TestCase):
     def test_offline_avoids_network(self):
         with patch.object(game.urllib.request, "urlopen") as fetch:

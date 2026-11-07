@@ -48,6 +48,11 @@ accuracy 100.0% time: 1.12s points: 179 best: 179
 
 - Submit with Enter; Backspace works normally. Type `:q` to end a session and
   open the play-again menu. Ctrl+C or EOF (Ctrl+D on an empty line) exits the game.
+- In timed modes, a live countdown appears next to the word, for example
+  `hypothesis  14.9s`. It shows the session's remaining time, updates every tenth
+  of a second while you type, and turns red for the final five seconds.
+  Free play has no countdown. `--no-color` keeps the live timer active.
+  Piped output and `TERM=dumb` show remaining time once per word instead.
 - Timed tests end automatically, even without pressing Enter. The clock starts
   at the first word's prompt, after vocabulary loading. Answers submitted at or
   after the deadline are not scored; unfinished input is discarded.
@@ -133,4 +138,5 @@ Tests cover scoring, cumulative points, all menu choices, deadline enforcement,
 actual terminal expiry without Enter, clean exits, shuffled word selection,
 online response validation, offline fallback, replay and mode switching, best-score
 persistence, corrupt score files, save failures, color controls, real arrow-key
-navigation, terminal restoration on interruption, and scaled scores.
+navigation, terminal restoration on interruption, scaled scores, live countdown expiry, typing and Backspace during timer
+updates, and terminal restoration after countdown interruption.
