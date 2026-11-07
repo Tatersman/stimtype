@@ -21,14 +21,19 @@ prerequisites along with a full system update. After installation, run
 
 ## Play
 
-Choose a mode at startup:
+Choose a mode at startup with **↑/↓**, then press **Enter**. Navigation wraps
+at the ends; `q` quits. Number keys move the highlight to that option.
+The replay menu uses the same controls. Piped input and `TERM=dumb` use the
+numbered, line-based menu instead.
+
+The startup options are:
 
 ```text
 stimtype
-1. 15-second test  best: 0.00
-2. 30-second test  best: 0.00
-3. 60-second test  best: 0.00
-4. Free play  best: 0.00
+1. 15-second test  best: 0
+2. 30-second test  best: 0
+3. 60-second test  best: 0
+4. Free play  best: 0
 q. Quit
 Select:
 ```
@@ -38,7 +43,7 @@ Each round follows this format:
 ```text
 hypothesis
 > hypothesis
-accuracy 100.0% time: 1.12s points: 0.89 best: 0.89
+accuracy 100.0% time: 1.12s points: 179 best: 179
 ```
 
 - Submit with Enter; Backspace works normally. Type `:q` to end a session and
@@ -48,20 +53,31 @@ accuracy 100.0% time: 1.12s points: 0.89 best: 0.89
   after the deadline are not scored; unfinished input is discarded.
 - After each test or free-play session, choose **Same mode**, **Change mode**, or
   **Quit**. Replaying resets the timer and points and loads a fresh word list.
-- Each answer adds **`(1/3 + (2/3 × accuracy)) / time`** to your points.
+- Each answer adds **`200 × (1/3 + (2/3 × accuracy)) / time`** to your score.
   Accuracy is a fraction from 0 to 1; time is elapsed seconds. A perfect answer
-  in 2 seconds earns 0.50 points; 50% accuracy in 2 seconds earns about 0.33.
+  in 2 seconds earns 100 points; 50% accuracy in 2 seconds earns about 67.
   Faster, more accurate answers earn more. Following this formula, even a 0%
-  answer earns the base `1 / (3 × time)`. Points accumulate at full precision
-  and display with two decimal places. Nonpositive elapsed time earns zero.
+  answer earns the base `200 / (3 × time)`. Points accumulate at full precision
+  and display rounded to whole numbers. Nonpositive elapsed time earns zero.
 - A live **best** counter tracks the highest total for the current mode. Best
   scores are separate for 15 seconds, 30 seconds, 60 seconds, and free play.
   A new record is saved at session end, including when you exit with Ctrl+C.
+  Existing saved bests are automatically displayed at the new 200× scale.
+  Records remain stored in original units to preserve compatibility.
 - Time includes reading/reaction time and the final Enter. Accuracy compares
   your final submitted text, including case and spaces, using
   `100 × (1 − edit_distance / max(word_length, typed_length))`. Missing, extra,
   and substituted characters count as edits. Empty answers score 0%; corrections
   made before submitting do not count against you.
+
+The final summary uses this format (a previous score of 3.71 now displays as 742):
+
+```text
+words: 7 score: 742 best: 742
+```
+
+`words` counts submitted attempts, including incorrect answers. Quit commands
+and unfinished answers at the deadline do not count.
 
 ## Vocabulary
 
@@ -91,7 +107,8 @@ If saving is unavailable, records remain available for the current run.
 Words and headings are cyan, prompts are purple, perfect answers are green,
 and imperfect answers and records are yellow. Use `stimtype --no-color` for
 plain text. The game also respects `NO_COLOR`, disables color for `TERM=dumb`,
-and leaves redirected output free of color escape sequences.
+and leaves redirected output free of escape sequences. `--no-color` keeps
+arrow navigation active, using a plain `>` marker for the selected option.
 
 ## Update or uninstall
 
@@ -115,4 +132,5 @@ python3 -m unittest discover -s tests -v
 Tests cover scoring, cumulative points, all menu choices, deadline enforcement,
 actual terminal expiry without Enter, clean exits, shuffled word selection,
 online response validation, offline fallback, replay and mode switching, best-score
-persistence, corrupt score files, save failures, and color controls.
+persistence, corrupt score files, save failures, color controls, real arrow-key
+navigation, terminal restoration on interruption, and scaled scores.

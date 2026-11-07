@@ -9,6 +9,7 @@ from pathlib import Path
 import tempfile
 import random
 import select
+import shutil
 import sys
 import time
 import urllib.parse
@@ -43,6 +44,11 @@ def color(text, code):
             and os.environ.get("TERM") != "dumb"):
         return "\033[" + code + "m" + text + "\033[0m"
     return text
+
+
+def display_score(points):
+    # Keep stored records in original units so existing bests scale exactly once.
+    return "{:.0f}".format(points * 200)
 
 
 def score_path():
@@ -101,7 +107,7 @@ def load_words(offline=False):
         })
         request = urllib.request.Request(
             "https://api.datamuse.com/words?" + query,
-            headers={"User-Agent": "stimtype/1.3.0"},
+            headers={"User-Agent": "stimtype/1.4.0"},
         )
         try:
             with urllib.request.urlopen(request, timeout=3) as response:
@@ -204,8 +210,8 @@ def play(words, duration=None, best=0.0):
             score = accuracy(word, typed)
             points += earned_points(score, elapsed)
             rounds += 1
-            print(color("accuracy {:.1f}% time: {:.2f}s points: {:.2f} best: {:.2f}".format(
-                score, elapsed, points, max(best, points),
+            print(color("accuracy {:.1f}% time: {:.2f}s points: {} best: {}".format(
+                score, elapsed, display_score(points), display_score(max(best, points)),
             ), "32" if score == 100 else "33") + "\n")
     except TimeUp:
         discard_partial_input()
@@ -213,36 +219,91 @@ def play(words, duration=None, best=0.0):
     except (KeyboardInterrupt, EOFError):
         print()
         exit_requested = True
-    print(color("rounds: {} points: {:.2f} best: {:.2f}".format(
-        rounds, points, max(best, points)), "1;36"))
-    if points > best:
-        print(color("New best score!", "1;33"))
+    print(color("words: {} score: {} best: {}".format(
+        rounds, display_score(points), display_score(max(best, points))), "1;36"))
     return points, exit_requested
+
+
+def read_menu_key(fd):
+    key = os.read(fd, 1)
+    if not key or key == b"\x04":
+        raise EOFError
+    if key == b"\x1b":
+        sequence = b""
+        # CSI (ESC [ A/B) and application cursor mode (ESC O A/B).
+        for _ in range(2):
+            if not select.select([fd], [], [], 0.15)[0]:
+                return ""
+            sequence += os.read(fd, 1)
+        return {b"[A": "up", b"OA": "up", b"[B": "down", b"OB": "down"}.get(sequence, "")
+    if key in (b"\r", b"\n"):
+        return "enter"
+    return key.decode("ascii", errors="ignore").lower()
+
+
+def choose_menu(title, options):
+    """Arrow navigation on terminals, simple line input for pipes/dumb terminals."""
+    print(color("\n" + title, "1;36"))
+    keys = [key for key, _ in options]
+    if not (sys.stdin.isatty() and sys.stdout.isatty()) or os.environ.get("TERM") == "dumb":
+        for key, label in options:
+            print("{}. {}".format(key, label))
+        while True:
+            choice = input("Select: ").strip().lower()
+            if choice == ":q":
+                choice = "q"
+            if choice in keys:
+                return choice
+            print("Choose " + ", ".join(keys) + ".")
+
+    import termios
+    import tty
+    fd = sys.stdin.fileno()
+    original = termios.tcgetattr(fd)
+    selected = 0
+    print("↑/↓ move · Enter select · q quit")
+    try:
+        tty.setcbreak(fd)
+        print("\033[?25l", end="", flush=True)
+        redraw = False
+        while True:
+            if redraw:
+                print("\033[{}A".format(len(options)), end="")
+            width = max(1, shutil.get_terminal_size().columns - 1)
+            for index, (key, label) in enumerate(options):
+                line = ("> " if index == selected else "  ") + key + ". " + label
+                line = line[:width]
+                print("\r\033[2K" + (color(line, "1;36") if index == selected else line))
+            sys.stdout.flush()
+            redraw = True
+            while True:
+                key = read_menu_key(fd)
+                if key == "enter":
+                    return options[selected][0]
+                if key == "q":
+                    return "q"
+                if key in ("up", "down"):
+                    selected = (selected + (1 if key == "down" else -1)) % len(options)
+                    break
+                if key in keys:
+                    selected = keys.index(key)
+                    break
+    finally:
+        termios.tcsetattr(fd, termios.TCSADRAIN, original)
+        print("\033[?25h", end="", flush=True)
 
 
 def menu(bests=None):
     bests = bests or {}
-    print(color("\nstimtype", "1;36"))
+    options = []
     for key, seconds in MODES.items():
         label = "Free play" if seconds is None else "{}-second test".format(seconds)
-        print("{}. {}  {}".format(key, label, color(
-            "best: {:.2f}".format(bests.get(key, 0)), "33")))
-    print("q. Quit")
-    while True:
-        choice = input(color("Select: ", "35")).strip().lower()
-        if choice in MODES or choice in ("q", ":q"):
-            return choice
-        print("Choose 1, 2, 3, 4, or q.")
+        options.append((key, "{}  best: {}".format(label, display_score(bests.get(key, 0)))))
+    return choose_menu("stimtype", options + [("q", "Quit")])
 
 
 def replay_menu():
-    print(color("\nPlay again?", "1;36"))
-    print("1. Same mode\n2. Change mode\nq. Quit")
-    while True:
-        choice = input(color("Select: ", "35")).strip().lower()
-        if choice in ("1", "2", "q", ":q"):
-            return choice
-        print("Choose 1, 2, or q.")
+    return choose_menu("Play again?", [("1", "Same mode"), ("2", "Change mode"), ("q", "Quit")])
 
 
 def main():
@@ -252,7 +313,7 @@ def main():
         epilog="Type the word and press Enter. :q opens replay; Ctrl+C or EOF quits.",
     )
     parser.add_argument("--offline", action="store_true", help="use the built-in vocabulary without fetching online")
-    parser.add_argument("--version", action="version", version="stimtype 1.3.0")
+    parser.add_argument("--version", action="version", version="stimtype 1.4.0")
     parser.add_argument("--no-color", action="store_true", help="disable terminal colors")
     args = parser.parse_args()
     COLOR_ENABLED = not args.no_color

@@ -57,28 +57,28 @@ class GameTests(unittest.TestCase):
 
     def test_points_accumulate_inverse_time_formula(self):
         output = self.play(["analysis", "analysis", ":q"], [0, 1.12, 2, 4, 5, 6])
-        self.assertIn("accuracy 100.0% time: 1.12s points: 0.89", output)
-        self.assertIn("accuracy 100.0% time: 2.00s points: 1.39", output)
-        self.assertIn("rounds: 2 points: 1.39", output)
+        self.assertIn("accuracy 100.0% time: 1.12s points: 179", output)
+        self.assertIn("accuracy 100.0% time: 2.00s points: 279", output)
+        self.assertIn("words: 2 score: 279", output)
 
     def test_incorrect_answer_gets_proportional_points(self):
         output = self.play(["analysi", ":q"], [0, 2, 3, 4])
-        self.assertIn("accuracy 87.5% time: 2.00s points: 0.46", output)
+        self.assertIn("accuracy 87.5% time: 2.00s points: 92", output)
 
     def test_expired_answer_is_not_scored(self):
         output = self.play(["analysis"], [0, 16], 15)
         self.assertIn("Time's up!", output)
-        self.assertIn("rounds: 0 points: 0", output)
+        self.assertIn("words: 0 score: 0", output)
 
     def test_idle_timeout_ends_test(self):
         output = self.play([game.TimeUp], [0], 15)
         self.assertIn("Time's up!", output)
-        self.assertIn("rounds: 0 points: 0", output)
+        self.assertIn("words: 0 score: 0", output)
 
     def test_quit_eof_and_interrupt(self):
         for answer in [":q", EOFError, KeyboardInterrupt]:
             output = self.play([answer], [0, 1])
-            self.assertIn("rounds: 0 points: 0", output)
+            self.assertIn("words: 0 score: 0", output)
 
     def test_shuffle_exhausts_pool_without_boundary_repeat(self):
         words = ("analysis", "inference", "hypothesis")
@@ -156,6 +156,77 @@ class ReplayAndRecordsTests(unittest.TestCase):
                 self.assertEqual(game.color("word", "36"), "word")
 
 
+class ArrowMenuTests(unittest.TestCase):
+    def test_scaled_summary_and_existing_records(self):
+        self.assertEqual(game.display_score(3.71), "742")
+        self.assertEqual(game.display_score(game.earned_points(100, 2)), "100")
+        with patch.object(game, "read_answer", side_effect=[":q"]), \
+                patch.object(game.time, "perf_counter", side_effect=[0, 1]), \
+                contextlib.redirect_stdout(io.StringIO()) as output:
+            game.play(["analysis"], best=3.71)
+        self.assertIn("words: 0 score: 0 best: 742", output.getvalue())
+        self.assertNotIn("rounds:", output.getvalue())
+
+    def run_terminal_menus(self, interrupt=False):
+        import pty
+        import select
+        import signal
+        import time
+        import termios
+        master, slave = pty.openpty()
+        original = termios.tcgetattr(slave)
+        code = (
+            "import runpy; g=runpy.run_path(%r); "
+            "print('MODE=' + g['menu'](), flush=True); "
+            "print('REPLAY=' + g['replay_menu'](), flush=True)"
+        ) % str(SCRIPT)
+        process = subprocess.Popen([sys.executable, "-c", code], stdin=slave,
+            stdout=slave, stderr=slave, env=dict(os.environ, TERM="xterm", NO_COLOR="1"))
+        transcript = bytearray()
+
+        def until(marker):
+            output = bytearray()
+            deadline = time.monotonic() + 4
+            while marker not in output and time.monotonic() < deadline:
+                if select.select([master], [], [], 0.1)[0]:
+                    output.extend(os.read(master, 8192))
+            transcript.extend(output)
+            self.assertIn(marker, output, output)
+            return output
+
+        try:
+            until(b"\x1b[?25l")
+            if interrupt:
+                process.send_signal(signal.SIGINT)
+                process.wait(timeout=4)
+                until(b"\x1b[?25h")
+            else:
+                # Up wraps to Quit; another Up selects Free play.
+                os.write(master, b"\x1b[A\x1b[A\r")
+                transition = until(b"Play again?")
+                self.assertIn(b"MODE=4", transition)
+                # Ensure the replay menu has entered cbreak before sending keys.
+                if b"\x1b[?25l" not in transition[transition.index(b"Play again?"):]:
+                    until(b"\x1b[?25l")
+                os.write(master, b"\x1b[B\x1b[A\x1bOB\r")
+                until(b"REPLAY=2")
+                process.wait(timeout=4)
+                self.assertEqual(process.returncode, 0, transcript)
+            self.assertEqual(termios.tcgetattr(slave), original)
+        finally:
+            if process.poll() is None:
+                process.kill()
+                process.wait()
+            os.close(master)
+            os.close(slave)
+
+    def test_real_arrow_navigation_in_both_menus(self):
+        self.run_terminal_menus()
+
+    def test_interrupt_restores_terminal_and_cursor(self):
+        self.run_terminal_menus(interrupt=True)
+
+
 class WordTests(unittest.TestCase):
     def test_offline_avoids_network(self):
         with patch.object(game.urllib.request, "urlopen") as fetch:
@@ -198,7 +269,7 @@ class CommandTests(unittest.TestCase):
         self.assertIn("60-second test", process.stdout)
         self.assertIn("Free play", process.stdout)
         self.assertIn("accuracy 0.0%", process.stdout)
-        self.assertIn("rounds: 1 points:", process.stdout)
+        self.assertIn("words: 1 score:", process.stdout)
 
     def test_timed_session_expires_in_real_terminal_without_enter(self):
         import os
@@ -227,7 +298,7 @@ class CommandTests(unittest.TestCase):
             process.wait(timeout=1)
             self.assertEqual(process.returncode, 0, output)
             self.assertIn(b"Time's up!", output)
-            self.assertIn(b"rounds: 0 points: 0", output)
+            self.assertIn(b"words: 0 score: 0", output)
         finally:
             if process.poll() is None:
                 process.kill()
