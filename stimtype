@@ -3,6 +3,10 @@
 
 import argparse
 import json
+import math
+import os
+from pathlib import Path
+import tempfile
 import random
 import select
 import sys
@@ -31,6 +35,63 @@ TOPICS = ("philosophy", "psychology", "economics", "science", "literature",
           "sociology", "research", "mathematics")
 MODES = {"1": 15, "2": 30, "3": 60, "4": None}
 
+COLOR_ENABLED = True
+
+
+def color(text, code):
+    if (COLOR_ENABLED and sys.stdout.isatty() and "NO_COLOR" not in os.environ
+            and os.environ.get("TERM") != "dumb"):
+        return "\033[" + code + "m" + text + "\033[0m"
+    return text
+
+
+def score_path():
+    root = Path(os.environ.get("XDG_DATA_HOME", ""))
+    if not root.is_absolute():
+        root = Path.home() / ".local" / "share"
+    return root / "stimtype" / "best-scores-inverse-time-v1.json"
+
+
+def load_bests():
+    try:
+        data = json.loads(score_path().read_text())
+        if isinstance(data, dict):
+            return {key: float(value) for key, value in data.items()
+                    if key in MODES and type(value) in (int, float)
+                    and math.isfinite(value) and value >= 0}
+    except (OSError, ValueError, OverflowError):
+        pass
+    return {}
+
+
+def save_best(bests, mode, points):
+    if points <= bests.get(mode, 0):
+        return
+    bests[mode] = points
+    path = score_path()
+    temporary = None
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with tempfile.NamedTemporaryFile(mode="w", dir=path.parent, delete=False) as f:
+            temporary = f.name
+            json.dump(bests, f)
+        os.replace(temporary, path)
+    except OSError:
+        print("Best score kept for this run; could not save it to disk.")
+    finally:
+        if temporary is not None:
+            try:
+                os.unlink(temporary)
+            except OSError:
+                pass
+
+
+def earned_points(score, elapsed):
+    """Accuracy is normalized to 0–1; time is measured in seconds."""
+    if elapsed <= 0:
+        return 0.0
+    return (1.0 / 3.0 + (score / 100.0) * 2.0 / 3.0) / elapsed
+
 
 def load_words(offline=False):
     """Fetch academically themed vocabulary; safely fall back on any failure."""
@@ -40,7 +101,7 @@ def load_words(offline=False):
         })
         request = urllib.request.Request(
             "https://api.datamuse.com/words?" + query,
-            headers={"User-Agent": "stimtype/1.2.0"},
+            headers={"User-Agent": "stimtype/1.3.0"},
         )
         try:
             with urllib.request.urlopen(request, timeout=3) as response:
@@ -120,16 +181,17 @@ def accuracy(expected, typed):
     return 100.0 * (1.0 - previous[-1] / length)
 
 
-def play(words, duration=None):
+def play(words, duration=None, best=0.0):
     points = 0.0
     rounds = 0
     deadline = None
+    exit_requested = False
     try:
         for word in shuffled_words(words):
             if deadline is not None and time.perf_counter() >= deadline:
                 raise TimeUp
-            print(word)
-            print("> ", end="", flush=True)
+            print(color(word, "1;36"))
+            print(color("> ", "35"), end="", flush=True)
             started = time.perf_counter()
             if duration is not None and deadline is None:
                 deadline = started + duration
@@ -140,46 +202,78 @@ def play(words, duration=None):
             if typed.strip() == ":q":
                 break
             score = accuracy(word, typed)
-            points += score * elapsed
+            points += earned_points(score, elapsed)
             rounds += 1
-            print("accuracy {:.1f}% time: {:.2f}s points: {:.0f}\n".format(
-                score, elapsed, points,
-            ))
+            print(color("accuracy {:.1f}% time: {:.2f}s points: {:.2f} best: {:.2f}".format(
+                score, elapsed, points, max(best, points),
+            ), "32" if score == 100 else "33") + "\n")
     except TimeUp:
         discard_partial_input()
-        print("\nTime's up!")
+        print(color("\nTime's up!", "1;33"))
     except (KeyboardInterrupt, EOFError):
         print()
-    print("rounds: {} points: {:.0f}".format(rounds, points))
-    return 0
+        exit_requested = True
+    print(color("rounds: {} points: {:.2f} best: {:.2f}".format(
+        rounds, points, max(best, points)), "1;36"))
+    if points > best:
+        print(color("New best score!", "1;33"))
+    return points, exit_requested
 
 
-def menu():
-    print("stimtype\n1. 15-second test\n2. 30-second test\n3. 60-second test\n4. Free play\nq. Quit")
+def menu(bests=None):
+    bests = bests or {}
+    print(color("\nstimtype", "1;36"))
+    for key, seconds in MODES.items():
+        label = "Free play" if seconds is None else "{}-second test".format(seconds)
+        print("{}. {}  {}".format(key, label, color(
+            "best: {:.2f}".format(bests.get(key, 0)), "33")))
+    print("q. Quit")
     while True:
-        choice = input("Select: ").strip().lower()
+        choice = input(color("Select: ", "35")).strip().lower()
         if choice in MODES or choice in ("q", ":q"):
             return choice
         print("Choose 1, 2, 3, 4, or q.")
 
 
+def replay_menu():
+    print(color("\nPlay again?", "1;36"))
+    print("1. Same mode\n2. Change mode\nq. Quit")
+    while True:
+        choice = input(color("Select: ", "35")).strip().lower()
+        if choice in ("1", "2", "q", ":q"):
+            return choice
+        print("Choose 1, 2, or q.")
+
+
 def main():
+    global COLOR_ENABLED
     parser = argparse.ArgumentParser(
         description="Practice college-level vocabulary with timed tests or free play.",
-        epilog="Type the word and press Enter. :q, Ctrl+C, or EOF quits.",
+        epilog="Type the word and press Enter. :q opens replay; Ctrl+C or EOF quits.",
     )
     parser.add_argument("--offline", action="store_true", help="use the built-in vocabulary without fetching online")
-    parser.add_argument("--version", action="version", version="stimtype 1.2.0")
+    parser.add_argument("--version", action="version", version="stimtype 1.3.0")
+    parser.add_argument("--no-color", action="store_true", help="disable terminal colors")
     args = parser.parse_args()
+    COLOR_ENABLED = not args.no_color
+    bests = load_bests()
     try:
-        choice = menu()
-        if choice in ("q", ":q"):
-            return 0
-        if not args.offline:
-            print("Loading vocabulary...")
-        words = load_words(args.offline)
-        print("Type each word and press Enter. :q or Ctrl+C quits.\n")
-        return play(words, MODES[choice])
+        choice = menu(bests)
+        while choice not in ("q", ":q"):
+            if not args.offline:
+                print("Loading vocabulary...")
+            words = load_words(args.offline)
+            print("Type each word and press Enter. :q ends the session; Ctrl+C quits.\n")
+            points, exit_requested = play(words, MODES[choice], bests.get(choice, 0))
+            save_best(bests, choice, points)
+            if exit_requested:
+                return 0
+            action = replay_menu()
+            if action in ("q", ":q"):
+                return 0
+            if action == "2":
+                choice = menu(bests)
+        return 0
     except (KeyboardInterrupt, EOFError):
         print()
         return 0

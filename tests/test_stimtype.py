@@ -1,5 +1,7 @@
 """Behavior checks for scoring, repeated rounds, timing, and clean exits."""
 
+import os
+import tempfile
 import contextlib
 import importlib.machinery
 import importlib.util
@@ -50,18 +52,18 @@ class GameTests(unittest.TestCase):
                 patch.object(game, "read_answer", side_effect=answers), \
                 patch.object(game, "shuffled_words", return_value=iter(["analysis", "analysis", "analysis"])), \
                 patch.object(game.time, "perf_counter", side_effect=times):
-            self.assertEqual(game.play(["analysis"], duration), 0)
+            self.assertIsInstance(game.play(["analysis"], duration), tuple)
         return output.getvalue()
 
-    def test_points_accumulate_accuracy_times_seconds(self):
+    def test_points_accumulate_inverse_time_formula(self):
         output = self.play(["analysis", "analysis", ":q"], [0, 1.12, 2, 4, 5, 6])
-        self.assertIn("accuracy 100.0% time: 1.12s points: 112", output)
-        self.assertIn("accuracy 100.0% time: 2.00s points: 312", output)
-        self.assertIn("rounds: 2 points: 312", output)
+        self.assertIn("accuracy 100.0% time: 1.12s points: 0.89", output)
+        self.assertIn("accuracy 100.0% time: 2.00s points: 1.39", output)
+        self.assertIn("rounds: 2 points: 1.39", output)
 
     def test_incorrect_answer_gets_proportional_points(self):
         output = self.play(["analysi", ":q"], [0, 2, 3, 4])
-        self.assertIn("accuracy 87.5% time: 2.00s points: 175", output)
+        self.assertIn("accuracy 87.5% time: 2.00s points: 0.46", output)
 
     def test_expired_answer_is_not_scored(self):
         output = self.play(["analysis"], [0, 16], 15)
@@ -100,6 +102,60 @@ class GameTests(unittest.TestCase):
             wait.assert_called_once_with([sys.stdin], [], [], 5)
 
 
+class ReplayAndRecordsTests(unittest.TestCase):
+    def test_formula_normalizes_accuracy_and_rewards_speed(self):
+        self.assertAlmostEqual(game.earned_points(100, 2), 0.5)
+        self.assertAlmostEqual(game.earned_points(50, 2), 1 / 3)
+        self.assertAlmostEqual(game.earned_points(0, 2), 1 / 6)
+        self.assertGreater(game.earned_points(100, 1), game.earned_points(100, 2))
+        self.assertEqual(game.earned_points(100, 0), 0)
+
+    def test_best_scores_persist_per_mode_and_never_decrease(self):
+        with tempfile.TemporaryDirectory() as directory, \
+                patch.object(game, "score_path", return_value=Path(directory) / "scores.json"):
+            bests = game.load_bests()
+            game.save_best(bests, "1", 12.5)
+            game.save_best(bests, "1", 3)
+            game.save_best(bests, "4", 8)
+            self.assertEqual(game.load_bests(), {"1": 12.5, "4": 8})
+            self.assertEqual(list(Path(directory).iterdir()), [Path(directory) / "scores.json"])
+
+    def test_corrupt_and_invalid_records_are_ignored(self):
+        with tempfile.TemporaryDirectory() as directory, \
+                patch.object(game, "score_path", return_value=Path(directory) / "scores.json"):
+            path = game.score_path()
+            for data in ['bad json', '[]', '{"1": -1, "2": true, "3": NaN, "4": "bad"}']:
+                path.write_text(data)
+                self.assertEqual(game.load_bests(), {})
+
+    def test_save_failure_keeps_in_memory_record(self):
+        with patch.object(game.Path, "mkdir", side_effect=OSError), \
+                contextlib.redirect_stdout(io.StringIO()) as output:
+            bests = {}
+            game.save_best(bests, "1", 2.5)
+            self.assertEqual(bests["1"], 2.5)
+            self.assertIn("could not save", output.getvalue())
+
+    def test_replay_same_mode_change_mode_and_quit(self):
+        with tempfile.TemporaryDirectory() as directory:
+            process = subprocess.run([sys.executable, str(SCRIPT), "--offline", "--no-color"],
+                input="4\n:q\nwrong\n1\n:q\n2\n1\n:q\nq\n", text=True,
+                capture_output=True, timeout=5, env=dict(os.environ, XDG_DATA_HOME=directory))
+        self.assertEqual(process.returncode, 0, process.stderr)
+        self.assertEqual(process.stdout.count("Play again?"), 3)
+        self.assertEqual(process.stdout.count("15-second test"), 2)
+        self.assertNotIn("\x1b[", process.stdout)
+
+    def test_colors_respect_terminal_and_no_color(self):
+        with patch.object(game.sys.stdout, "isatty", return_value=True), \
+                patch.dict(os.environ, {"TERM": "xterm"}, clear=True):
+            self.assertIn("\x1b[", game.color("word", "36"))
+            with patch.dict(os.environ, {"NO_COLOR": ""}):
+                self.assertEqual(game.color("word", "36"), "word")
+            with patch.object(game, "COLOR_ENABLED", False):
+                self.assertEqual(game.color("word", "36"), "word")
+
+
 class WordTests(unittest.TestCase):
     def test_offline_avoids_network(self):
         with patch.object(game.urllib.request, "urlopen") as fetch:
@@ -132,15 +188,17 @@ class WordTests(unittest.TestCase):
 
 class CommandTests(unittest.TestCase):
     def test_actual_free_play_and_quit(self):
-        process = subprocess.run([sys.executable, str(SCRIPT), "--offline"],
-                                 input="4\n\n:q\n", text=True, capture_output=True, timeout=5)
+        with tempfile.TemporaryDirectory() as directory:
+            process = subprocess.run([sys.executable, str(SCRIPT), "--offline"],
+                                     input="4\n\n:q\nq\n", text=True, capture_output=True, timeout=5,
+                                     env=dict(os.environ, XDG_DATA_HOME=directory))
         self.assertEqual(process.returncode, 0, process.stderr)
         self.assertIn("15-second test", process.stdout)
         self.assertIn("30-second test", process.stdout)
         self.assertIn("60-second test", process.stdout)
         self.assertIn("Free play", process.stdout)
         self.assertIn("accuracy 0.0%", process.stdout)
-        self.assertIn("rounds: 1 points: 0", process.stdout)
+        self.assertIn("rounds: 1 points:", process.stdout)
 
     def test_timed_session_expires_in_real_terminal_without_enter(self):
         import os
