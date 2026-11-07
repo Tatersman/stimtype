@@ -1,51 +1,101 @@
 #!/usr/bin/env python3
-"""An endless, dependency-free terminal typing game. Requires Python 3.8+."""
+"""College vocabulary typing practice for Linux. Python 3.8+, no dependencies."""
 
 import argparse
+import json
 import random
+import select
+import sys
 import time
+import urllib.parse
+import urllib.request
 
 
 WORDS = tuple("""
-pneumonoultramicroscopicsilicovolcanoconiosis
-hippopotomonstrosesquipedaliophobia
-supercalifragilisticexpialidocious
-pseudopseudohypoparathyroidism
-floccinaucinihilipilification
-antidisestablishmentarianism
-honorificabilitudinitatibus
-thyroparathyroidectomized
-dichlorodifluoromethane
-electroencephalographically
-psychoneuroendocrinology
-electroencephalography
-magnetoencephalography
-immunoelectrophoresis
-otorhinolaryngological
-counterrevolutionaries
-uncharacteristically
-incomprehensibilities
-deinstitutionalization
-institutionalization
-internationalization
-compartmentalization
-spectrophotometrically
-spectrophotofluorometry
-photolithographically
-crystallographically
-psychopharmacological
-neuropsychopharmacology
-immunohistochemistry
-electrocardiographically
-electroencephalographer
-electrophysiological
-phosphatidylethanolamine
-deoxyribonucleoprotein
-trinitrophenylmethylnitramine
-tetrachlorodibenzodioxin
-dichlorodiphenyltrichloroethane
-radiotelecommunications
+abstract aesthetic ambiguity analogous analysis anomaly articulate assertion
+assumption autonomy coherent cognitive compelling comprehensive conceptual
+conclusion consensus consequence constituent context contingency correlation
+criterion critique cumulative deduction demographic derivative discourse
+empirical encompass epistemology equilibrium ethical evaluate evidence
+explicit facilitate feasible framework fundamental hypothesis ideology
+implicit implication inference innovation integrate integrity interpret
+intrinsic intuitive justification legitimate methodology mitigate nuanced
+objective paradigm paradox parameter perception perspective phenomenon
+plausible pragmatic precedent precision premise prevalent principle
+proportion qualitative quantitative rationale reciprocal reconcile
+relevant resilience rhetoric rigorous scrutiny significant simulation
+skeptical spectrum speculative substantial synthesis systematic theoretical
+trajectory transition transparent underlying validate variable versatile
 """.split())
+TOPICS = ("philosophy", "psychology", "economics", "science", "literature",
+          "sociology", "research", "mathematics")
+MODES = {"1": 15, "2": 30, "3": 60, "4": None}
+
+
+def load_words(offline=False):
+    """Fetch academically themed vocabulary; safely fall back on any failure."""
+    if not offline:
+        query = urllib.parse.urlencode({
+            "rel_trg": random.choice(TOPICS), "max": 100,
+        })
+        request = urllib.request.Request(
+            "https://api.datamuse.com/words?" + query,
+            headers={"User-Agent": "stimtype/1.2.0"},
+        )
+        try:
+            with urllib.request.urlopen(request, timeout=3) as response:
+                data = json.loads(response.read(131073))
+            if isinstance(data, list):
+                words = tuple(dict.fromkeys(
+                    item["word"] for item in data
+                    if isinstance(item, dict) and isinstance(item.get("word"), str)
+                    and 7 <= len(item["word"]) <= 14
+                    and item["word"].isascii() and item["word"].isalpha()
+                    and item["word"].islower()
+                ))
+                if len(words) >= 10:
+                    return words
+        except (OSError, ValueError):
+            pass
+    return WORDS
+
+
+def shuffled_words(words):
+    """Use every word once per shuffle, avoiding repeats at bag boundaries."""
+    words = tuple(dict.fromkeys(words))
+    previous = None
+    while True:
+        bag = list(words)
+        random.shuffle(bag)
+        if len(bag) > 1 and bag[0] == previous:
+            bag[0], bag[1] = bag[1], bag[0]
+        for word in bag:
+            previous = word
+            yield word
+
+
+class TimeUp(Exception):
+    pass
+
+
+def read_answer(deadline=None):
+    if deadline is not None:
+        remaining = deadline - time.perf_counter()
+        if remaining <= 0 or not select.select([sys.stdin], [], [], remaining)[0]:
+            raise TimeUp
+    answer = sys.stdin.readline()
+    if answer == "":
+        raise EOFError
+    if deadline is not None and time.perf_counter() >= deadline:
+        raise TimeUp
+    return answer.rstrip("\r\n")
+
+
+def discard_partial_input():
+    # Do not leave an unfinished timed answer for the user's shell to execute.
+    if sys.stdin.isatty():
+        import termios
+        termios.tcflush(sys.stdin, termios.TCIFLUSH)
 
 
 def accuracy(expected, typed):
@@ -70,40 +120,69 @@ def accuracy(expected, typed):
     return 100.0 * (1.0 - previous[-1] / length)
 
 
-def play():
-    """Show a word, time one response, score it, and repeat until quit."""
-    previous_word = None
-
+def play(words, duration=None):
+    points = 0.0
+    rounds = 0
+    deadline = None
     try:
-        while True:
-            # Avoid showing the same word twice in a row.
-            word = random.choice(tuple(w for w in WORDS if w != previous_word))
-            previous_word = word
+        for word in shuffled_words(words):
+            if deadline is not None and time.perf_counter() >= deadline:
+                raise TimeUp
             print(word)
             print("> ", end="", flush=True)
             started = time.perf_counter()
-            typed = input()
+            if duration is not None and deadline is None:
+                deadline = started + duration
+            typed = read_answer(deadline)
             elapsed = time.perf_counter() - started
-
+            if deadline is not None and started + elapsed >= deadline:
+                raise TimeUp
             if typed.strip() == ":q":
                 break
-
             score = accuracy(word, typed)
-            print("accuracy {:.1f}% time: {:.2f}s\n".format(score, elapsed))
+            points += score * elapsed
+            rounds += 1
+            print("accuracy {:.1f}% time: {:.2f}s points: {:.0f}\n".format(
+                score, elapsed, points,
+            ))
+    except TimeUp:
+        discard_partial_input()
+        print("\nTime's up!")
     except (KeyboardInterrupt, EOFError):
         print()
-
+    print("rounds: {} points: {:.0f}".format(rounds, points))
     return 0
+
+
+def menu():
+    print("stimtype\n1. 15-second test\n2. 30-second test\n3. 60-second test\n4. Free play\nq. Quit")
+    while True:
+        choice = input("Select: ").strip().lower()
+        if choice in MODES or choice in ("q", ":q"):
+            return choice
+        print("Choose 1, 2, 3, 4, or q.")
 
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Practice extremely long words, with accuracy and time after every attempt.",
+        description="Practice college-level vocabulary with timed tests or free play.",
         epilog="Type the word and press Enter. :q, Ctrl+C, or EOF quits.",
     )
-    parser.add_argument("--version", action="version", version="stimtype 1.1.0")
-    parser.parse_args()
-    return play()
+    parser.add_argument("--offline", action="store_true", help="use the built-in vocabulary without fetching online")
+    parser.add_argument("--version", action="version", version="stimtype 1.2.0")
+    args = parser.parse_args()
+    try:
+        choice = menu()
+        if choice in ("q", ":q"):
+            return 0
+        if not args.offline:
+            print("Loading vocabulary...")
+        words = load_words(args.offline)
+        print("Type each word and press Enter. :q or Ctrl+C quits.\n")
+        return play(words, MODES[choice])
+    except (KeyboardInterrupt, EOFError):
+        print()
+        return 0
 
 
 if __name__ == "__main__":

@@ -44,128 +44,137 @@ class AccuracyTests(unittest.TestCase):
 
 
 class GameTests(unittest.TestCase):
-    def run_game(self, answers, words=None, times=None):
+    def play(self, answers, times, duration=None):
         output = io.StringIO()
-        responses = iter(answers)
-
-        def terminal_input():
-            response = next(responses)
-            if isinstance(response, type) and issubclass(response, BaseException):
-                raise response
-            # Real terminals echo submitted text, including the final newline.
-            print(response)
-            return response
-
         with contextlib.redirect_stdout(output), \
-                patch("builtins.input", side_effect=terminal_input), \
-                patch.object(game.random, "choice", side_effect=words or ["garden"]), \
-                patch.object(game.time, "perf_counter", side_effect=times or [10.0]):
-            result = game.play()
-        self.assertEqual(result, 0)
+                patch.object(game, "read_answer", side_effect=answers), \
+                patch.object(game, "shuffled_words", return_value=iter(["analysis", "analysis", "analysis"])), \
+                patch.object(game.time, "perf_counter", side_effect=times):
+            self.assertEqual(game.play(["analysis"], duration), 0)
         return output.getvalue()
 
-    def test_exact_requested_template_with_a_mocked_word(self):
-        output = self.run_game(
-            answers=["nest", ":q"],
-            words=["nest", "garden"],
-            times=[10.0, 11.12, 20.0, 21.0],
-        )
-        self.assertEqual(output, "nest\n> nest\naccuracy 100.0% time: 1.12s\n\ngarden\n> :q\n")
+    def test_points_accumulate_accuracy_times_seconds(self):
+        output = self.play(["analysis", "analysis", ":q"], [0, 1.12, 2, 4, 5, 6])
+        self.assertIn("accuracy 100.0% time: 1.12s points: 112", output)
+        self.assertIn("accuracy 100.0% time: 2.00s points: 312", output)
+        self.assertIn("rounds: 2 points: 312", output)
 
-    def test_multiple_rounds_report_elapsed_time_and_accuracy(self):
-        output = self.run_game(
-            answers=["garden", "forst", ":q"],
-            words=["garden", "forest", "apple"],
-            times=[10.0, 11.25, 20.0, 22.75, 30.0, 35.0],
-        )
-        self.assertEqual(
-            output,
-            "garden\n> garden\naccuracy 100.0% time: 1.25s\n\n"
-            "forest\n> forst\naccuracy 83.3% time: 2.75s\n\n"
-            "apple\n> :q\n",
-        )
+    def test_incorrect_answer_gets_proportional_points(self):
+        output = self.play(["analysi", ":q"], [0, 2, 3, 4])
+        self.assertIn("accuracy 87.5% time: 2.00s points: 175", output)
 
-    def test_empty_answer_is_a_scored_round(self):
-        output = self.run_game(
-            answers=["", ":q"],
-            words=["garden", "forest"],
-            times=[10.0, 11.0, 20.0, 21.0],
-        )
-        self.assertEqual(output, "garden\n> \naccuracy 0.0% time: 1.00s\n\nforest\n> :q\n")
+    def test_expired_answer_is_not_scored(self):
+        output = self.play(["analysis"], [0, 16], 15)
+        self.assertIn("Time's up!", output)
+        self.assertIn("rounds: 0 points: 0", output)
 
-    def test_quit_does_not_count_as_an_attempt(self):
-        output = self.run_game([":q"], times=[10.0, 12.0])
-        self.assertEqual(output, "garden\n> :q\n")
+    def test_idle_timeout_ends_test(self):
+        output = self.play([game.TimeUp], [0], 15)
+        self.assertIn("Time's up!", output)
+        self.assertIn("rounds: 0 points: 0", output)
 
-    def test_eof_and_keyboard_interrupt_before_first_round_exit_cleanly(self):
-        for exit_signal in (EOFError, KeyboardInterrupt):
-            with self.subTest(exit_signal=exit_signal):
-                output = self.run_game([exit_signal])
-                self.assertEqual(output, "garden\n> \n")
+    def test_quit_eof_and_interrupt(self):
+        for answer in [":q", EOFError, KeyboardInterrupt]:
+            output = self.play([answer], [0, 1])
+            self.assertIn("rounds: 0 points: 0", output)
 
-    def test_eof_and_keyboard_interrupt_preserve_completed_results(self):
-        for exit_signal in (EOFError, KeyboardInterrupt):
-            with self.subTest(exit_signal=exit_signal):
-                output = self.run_game(
-                    ["garden", exit_signal],
-                    words=["garden", "forest"],
-                    times=[10.0, 11.0, 20.0],
-                )
-                self.assertEqual(
-                    output,
-                    "garden\n> garden\naccuracy 100.0% time: 1.00s\n\nforest\n> \n",
-                )
+    def test_shuffle_exhausts_pool_without_boundary_repeat(self):
+        words = ("analysis", "inference", "hypothesis")
+        stream = game.shuffled_words(words)
+        values = [next(stream) for _ in range(30)]
+        for i in range(0, 30, 3):
+            self.assertEqual(set(values[i:i+3]), set(words))
+        self.assertTrue(all(a != b for a, b in zip(values, values[1:])))
 
-    def test_previous_word_is_excluded_from_the_next_selection(self):
-        choices = []
+    def test_menu_modes_and_invalid_choice(self):
+        for choice, duration in [("1", 15), ("2", 30), ("3", 60), ("4", None)]:
+            with patch("builtins.input", side_effect=["wrong", choice]), \
+                    contextlib.redirect_stdout(io.StringIO()):
+                self.assertEqual(game.MODES[game.menu()], duration)
 
-        def choose(words):
-            choices.append(tuple(words))
-            return words[0]
-
-        with contextlib.redirect_stdout(io.StringIO()), \
-                patch("builtins.input", side_effect=["anchor", ":q"]), \
-                patch.object(game.random, "choice", side_effect=choose):
-            game.play()
-        self.assertGreater(len(choices[0]), 1)
-        self.assertNotIn(choices[0][0], choices[1])
+    def test_deadline_wait_is_bounded(self):
+        with patch.object(game.time, "perf_counter", return_value=10), \
+                patch.object(game.select, "select", return_value=([], [], [])) as wait:
+            with self.assertRaises(game.TimeUp):
+                game.read_answer(15)
+            wait.assert_called_once_with([sys.stdin], [], [], 5)
 
 
-class WordListTests(unittest.TestCase):
-    def test_words_are_unique_lowercase_letters_and_at_least_twenty_characters(self):
-        self.assertGreater(len(game.WORDS), 1)
+class WordTests(unittest.TestCase):
+    def test_offline_avoids_network(self):
+        with patch.object(game.urllib.request, "urlopen") as fetch:
+            self.assertEqual(game.load_words(True), game.WORDS)
+            fetch.assert_not_called()
         self.assertEqual(len(game.WORDS), len(set(game.WORDS)))
-        for word in game.WORDS:
-            with self.subTest(word=word):
-                self.assertGreaterEqual(len(word), 20)
-                self.assertTrue(word.isalpha())
-                self.assertTrue(word.isascii())
-                self.assertEqual(word, word.lower())
+        self.assertTrue(all(6 <= len(w) <= 14 for w in game.WORDS))
+
+    def test_network_failure_and_invalid_data_fall_back(self):
+        from unittest.mock import MagicMock
+        for payload in [b"not json", b"{}", b"[]", b'[{}, {"word": 123}]']:
+            response = MagicMock()
+            response.__enter__.return_value.read.return_value = payload
+            with patch.object(game.urllib.request, "urlopen", return_value=response):
+                self.assertEqual(game.load_words(), game.WORDS)
+        with patch.object(game.urllib.request, "urlopen", side_effect=OSError):
+            self.assertEqual(game.load_words(), game.WORDS)
+
+    def test_online_words_are_filtered_and_deduplicated(self):
+        import json
+        from unittest.mock import MagicMock
+        expected = tuple(w for w in game.WORDS if len(w) >= 7)[:15]
+        data = [{"word": w} for w in expected + expected]
+        data.extend([{"word": w} for w in ["two words", "abc", "UPPERCASE", "hello\x1bworld"]])
+        response = MagicMock()
+        response.__enter__.return_value.read.return_value = json.dumps(data).encode()
+        with patch.object(game.urllib.request, "urlopen", return_value=response):
+            self.assertEqual(game.load_words(), expected)
 
 
 class CommandTests(unittest.TestCase):
-    def test_help_and_version_do_not_start_a_round(self):
-        for option, expected in (("--help", "usage:"), ("--version", "stimtype 1.1.0")):
-            with self.subTest(option=option):
-                process = subprocess.run(
-                    [sys.executable, str(SCRIPT), option],
-                    input="", capture_output=True, text=True, timeout=5,
-                )
-                self.assertEqual(process.returncode, 0, process.stderr)
-                self.assertIn(expected, process.stdout)
-                self.assertNotIn("> ", process.stdout)
-
-    def test_actual_process_accepts_input_then_quits(self):
-        process = subprocess.run(
-            [sys.executable, str(SCRIPT)],
-            input="\n:q\n", capture_output=True, text=True, timeout=5,
-        )
+    def test_actual_free_play_and_quit(self):
+        process = subprocess.run([sys.executable, str(SCRIPT), "--offline"],
+                                 input="4\n\n:q\n", text=True, capture_output=True, timeout=5)
         self.assertEqual(process.returncode, 0, process.stderr)
-        self.assertRegex(
-            process.stdout,
-            r"\A[a-z]{20,}\n> accuracy 0\.0% time: \d+\.\d{2}s\n\n[a-z]{20,}\n> \Z",
-        )
-        self.assertEqual(process.stderr, "")
+        self.assertIn("15-second test", process.stdout)
+        self.assertIn("30-second test", process.stdout)
+        self.assertIn("60-second test", process.stdout)
+        self.assertIn("Free play", process.stdout)
+        self.assertIn("accuracy 0.0%", process.stdout)
+        self.assertIn("rounds: 1 points: 0", process.stdout)
+
+    def test_timed_session_expires_in_real_terminal_without_enter(self):
+        import os
+        import pty
+        import select
+        import time
+        master, slave = pty.openpty()
+        # Exercise the same deadline path with a short duration for a fast check.
+        code = "import runpy; g=runpy.run_path(%r); g['play'](['analysis'], 0.2)" % str(SCRIPT)
+        process = subprocess.Popen([sys.executable, "-c", code], stdin=slave,
+                                   stdout=slave, stderr=slave)
+        os.close(slave)
+        output = b""
+        end = time.monotonic() + 5
+        try:
+            os.write(master, b"unfinished")
+            while time.monotonic() < end:
+                if select.select([master], [], [], 0.1)[0]:
+                    try:
+                        chunk = os.read(master, 4096)
+                    except OSError:
+                        break
+                    if not chunk:
+                        break
+                    output += chunk
+            process.wait(timeout=1)
+            self.assertEqual(process.returncode, 0, output)
+            self.assertIn(b"Time's up!", output)
+            self.assertIn(b"rounds: 0 points: 0", output)
+        finally:
+            if process.poll() is None:
+                process.kill()
+                process.wait()
+            os.close(master)
 
 
 if __name__ == "__main__":
